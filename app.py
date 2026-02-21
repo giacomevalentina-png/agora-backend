@@ -5,6 +5,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 import json
 import os
+import mailchimp_marketing as MailchimpMarketing
+from mailchimp_marketing.api_client import ApiClientError
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
@@ -14,6 +16,16 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = 'your-secret-key'
 
 db = SQLAlchemy(app)
+# Mailchimp Configuration
+MAILCHIMP_API_KEY = os.environ.get('MAILCHIMP_API_KEY')
+MAILCHIMP_SERVER = os.environ.get('MAILCHIMP_SERVER', 'us8')
+MAILCHIMP_AUDIENCE_ID = os.environ.get('MAILCHIMP_AUDIENCE_ID')
+
+mailchimp = MailchimpMarketing.Client()
+mailchimp.set_config({
+    "api_key": MAILCHIMP_API_KEY,
+    "server": MAILCHIMP_SERVER
+})
 
 # Models
 class User(db.Model):
@@ -95,12 +107,24 @@ def create_article():
 @app.route('/api/newsletter/subscribe', methods=['POST'])
 def subscribe():
     data = request.json
-    if NewsletterSubscriber.query.filter_by(email=data['email']).first():
-        return jsonify({'message': 'Already subscribed'})
-    sub = NewsletterSubscriber(email=data['email'])
-    db.session.add(sub)
-    db.session.commit()
-    return jsonify({'message': 'Subscribed'}), 201
+    email = data['email']
+    
+    # Save to database
+    if not NewsletterSubscriber.query.filter_by(email=email).first():
+        subscriber = NewsletterSubscriber(email=email)
+        db.session.add(subscriber)
+        db.session.commit()
+    
+    # Add to Mailchimp
+    try:
+        mailchimp.lists.add_list_member(MAILCHIMP_AUDIENCE_ID, {
+            "email_address": email,
+            "status": "subscribed"
+        })
+        return jsonify({'message': 'Subscribed successfully!'}), 201
+    except ApiClientError as error:
+        # Already subscribed or other error
+        return jsonify({'message': 'Subscription processed'}), 200
 
 @app.route('/api/newsletter/subscribers')
 def get_subscribers():
